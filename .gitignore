@@ -21,3 +21,8 @@ $RECYCLE.BIN/
 # =========================
 # Operating System Files
 # =========================
+*.xml
+*.iml
+
+__pycache__
+.idea
