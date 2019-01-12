@@ -1,0 +1,11 @@
+f_weight_decay: 0.001
+i_dim_in: 250
+i_dim_out: 100
+i_n_in: 3
+i_n_out: 1
+b_dropout: 1
+s_nonlinearity: elu
+b_batch_norm_in: 0
+b_batch_norm_out: 0
+b_repeat_concat: 1
+s_train_loss: MSE_F,REG

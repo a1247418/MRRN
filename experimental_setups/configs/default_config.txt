@@ -1,0 +1,18 @@
+f_validation_ratio: 0.3
+
+i_splitting_seed: 1
+
+s_evaluation_loss: "MSE_F,MSE_CF"
+
+i_n_data_loading_threads: 16
+
+i_print_interval: 10
+
+s_dataset: multiNews
+s_experiment_name: 111_7000k15
+
+s_base_dir: ..
+s_data_dir: data
+s_log_dir: logs
+s_saves_dir: saves
+s_results_dir: saves

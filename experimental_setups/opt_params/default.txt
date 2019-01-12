@@ -1,0 +1,15 @@
+f_alpha: 0
+f_wass_lambda: 15.0
+i_wass_iterations: 25
+i_batch_size: 15
+i_iterations: 250
+s_optimizer: rms
+f_learning_rate: 1e-3
+f_lr_decay: 0.95
+f_rms_decay: 0.3
+b_early_stopping: True
+i_n_neighbours: 15
+b_gradient_clipping: False
+i_gradient_magnitude: 15
+b_use_propensity: True
+i_early_stopping_lookahead: 6

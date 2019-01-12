@@ -1,0 +1,12 @@
+s_name: default hparam search
+s_type: hps
+i_n_configurations: 10
+i_n_evaluations: 5
+f_evaluation_fraction = 0.3
+f_validation_fraction = 0.2
+s_config_file: default_config
+models:{
+	s_model_name: MRRN
+	s_opt_params_file: default_search
+	s_model_params_file: default_search_MRRN
+}
