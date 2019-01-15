@@ -70,7 +70,8 @@ def _get_permutation_from_seed(length, seed):
     return permutation
 
 
-def _get_iterators_from_data(data_dict, meta, generator, batch_size=[None], splits=[1], do_shuffle=[False], splitting_seed=0):
+def _get_iterators_from_data(data_dict, meta, generator, batch_size=[None], splits=[1], do_shuffle=[False],
+                             splitting_seed=0):
     iterators = []
 
     n_samples = meta["n_samples"]
@@ -142,7 +143,7 @@ def _get_data_file(experiment, file_number):
 
 
 def load_data(experiment, file_index, opt_params=None, batch_size=None,
-              splits=None, do_shuffle=None, splitting_seed=None):
+              splits=None, do_shuffle=None, repeat=None, splitting_seed=None, additional_columns=None):
     """
     Returns iterators for the specified data file. Either opt_params or batch_size must
     be specified.
@@ -160,6 +161,7 @@ def load_data(experiment, file_index, opt_params=None, batch_size=None,
     if splitting_seed is None:
         splitting_seed = experiment.config.splitting_seed
 
+    # TODO: Document default behaviour
     if splits is None:
         eval_fract = experiment.evaluation_fraction
         val_fract = experiment.validation_fraction
@@ -169,6 +171,8 @@ def load_data(experiment, file_index, opt_params=None, batch_size=None,
         batch_size = [opt_params.batch_size]*3
     if do_shuffle is None:
         do_shuffle = [True, True, False]
+    if repeat is None:
+        repeat = [True] * len(splits)
 
     file = _get_data_file(experiment, file_index)
     file_ending = file.split(".")[-1]
@@ -177,6 +181,8 @@ def load_data(experiment, file_index, opt_params=None, batch_size=None,
 
     if file_ending == "npy":
         data_dict, meta = _load_data_from_npy(file)
+        if additional_columns is not None:
+            data_dict.update(additional_columns)
         iterators = _get_iterators_from_data(data_dict, meta, BasicGenerator, batch_size=batch_size,
                                  splits=splits, do_shuffle=do_shuffle, splitting_seed=splitting_seed)
     else:

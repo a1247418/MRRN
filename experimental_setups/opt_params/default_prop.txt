@@ -1,0 +1,8 @@
+i_batch_size: 256
+i_iterations: 100
+s_optimizer: rms
+f_learning_rate: 1e-3
+f_lr_decay: 0.98
+f_rms_decay: 0.3
+b_gradient_clipping: 1
+i_gradient_magnitude: 5

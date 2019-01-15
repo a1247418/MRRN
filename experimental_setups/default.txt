@@ -2,11 +2,20 @@ s_name: default hparam search
 s_type: hps
 i_n_configurations: 10
 i_n_evaluations: 5
-f_evaluation_fraction = 0.3
-f_validation_fraction = 0.2
+f_evaluation_fraction: 0.3
+f_validation_fraction: 0.2
+additional_losses_to_record: REG,WASS
+
 s_config_file: default_config
 models:{
+	s_model_type: MRNN
 	s_model_name: MRRN
 	s_opt_params_file: default_search
-	s_model_params_file: default_search_MRRN
+	s_model_params_file: default_MRRN_search
+}
+propensity_model:{
+	s_model_type: MultipleNN
+	s_model_name: prop
+	s_opt_params_file: default_prop_search
+	s_model_params_file: default_prop_search
 }

@@ -1,0 +1,7 @@
+f_weight_decay: 0.001
+i_dim: 200
+i_n: 3
+b_dropout: 1
+s_nonlinearity: relu
+b_batch_norm: 0
+s_train_loss: MSE_F,REG

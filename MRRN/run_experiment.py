@@ -1,9 +1,14 @@
 import sys
 import utils
 
+import tensorflow as tf
+
 import config_loader
 import data_loader
 import preprocess
+import learning_routines
+import postprocess
+
 
 def run(experiment):
     #  Check whether all required paths exist
@@ -11,8 +16,19 @@ def run(experiment):
         if key.endswith("_dir"):
             utils.check_path(experiment.config[key])
 
-    data = data_loader.load()
-    preprocess.preprocess(experiment, data)
+    n_data_files = experiment.n_evaluations
+
+    for i in range(n_data_files):
+        tf.reset_default_graph()
+
+        iterators, meta = preprocess.preprocess(experiment, i)
+
+        tr_iter, val_iter, eval_iter = iterators
+
+        # TODO: structure hierarchy of file/model/preproc&core
+        #learning_routines.train_and_evaluate(experiment, experiment.mod, meta, run_id, tr_iter, val_iter, eval_iter=None, save=False, propensity_params=None)
+
+        # TODO: postprocess
 
 
 if __name__ == "__main__":
