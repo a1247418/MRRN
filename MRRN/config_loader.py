@@ -32,6 +32,8 @@ def _file2dict(file_path):
             # Add field to dictionary
             else:
                 key, value = line.split(":")
+                key = key.strip()
+                value = value.strip()
                 value_type = key[0]
                 if value_type == 'i':
                     value_type = int
@@ -41,6 +43,8 @@ def _file2dict(file_path):
                     value_type = lambda a: a == "1" or a == "True"
                 elif value_type == 's':
                     value_type = str
+                else:
+                    print("Unknown value type: {type} in {file}".format(type=value, file=file_path))
 
                 key = key[2:]
 
@@ -71,9 +75,9 @@ def load_experiment(name, options_to_overwrite=None):
     for key in experiment.config.keys():
         if key.endswith("_dir") and key != "base_dir":
             experiment.config[key] = os.path.join(experiment.config["base_dir"],
+                                                  experiment.config[key],
                                                   experiment.config.dataset,
-                                                  experiment.config.experiment_name,
-                                                  experiment.config[key])
+                                                  experiment.config.experiment_name) + os.sep
 
     for model_dict in experiment.models:
         opt_path = os.path.join("..", "experimental_setups", "opt_params", model_dict.opt_params_file + ".txt")
@@ -81,6 +85,14 @@ def load_experiment(name, options_to_overwrite=None):
 
         model_path = os.path.join("..", "experimental_setups", "model_params", model_dict.model_params_file + ".txt")
         model_dict["model_params"] = _file2dict(model_path)
+
+    # Propensity model
+    if "propensity_model" in experiment.keys():
+        model_dict_prop = experiment.propensity_model[0]
+        opt_path_prop = os.path.join("..", "experimental_setups", "opt_params", model_dict_prop.opt_params_file + ".txt")
+        model_dict_prop["opt_params"] = _file2dict(opt_path_prop)
+        model_path_prop = os.path.join("..", "experimental_setups", "model_params", model_dict_prop.model_params_file + ".txt")
+        model_dict_prop["model_params"] = _file2dict(model_path_prop)
 
     if options_to_overwrite:
         for option in options_to_overwrite:

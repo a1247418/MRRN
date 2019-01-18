@@ -1,8 +1,12 @@
 import os
+import glob
 import random
 
 import numpy as np
 import tensorflow as tf
+
+import utils
+import loss_def
 
 
 class BasicGenerator:
@@ -17,7 +21,7 @@ class BasicGenerator:
         n_samples = len(self.indices)
         idx = 0
         while True:
-            to_yield = {k:v[self.indices[idx]] for k,v in self.data.items()}
+            to_yield = {k:v[self.indices[idx]] for k, v in self.data.items()}
             idx = (idx+1) % n_samples
 
             yield to_yield
@@ -30,19 +34,26 @@ def _load_data_from_npy(fname):
     meta = {}
 
     for key, value in data_in.items():
-        if key is not "treatment_types":
+        if key not in ["treatment_types", "centroids_x", "centroids_z","mu", "mu_pcf"]:
             data[key] = np.float32(value)
 
     to_int = ['t']
     for key in to_int:
-        if key in data.keys:
+        if key in data.keys():
             data[key] = data[key].astype('int')
 
     meta["treatment_types"] = np.int32(data_in["treatment_types"])
-    meta['n_treatments'] = int(max(data['t'][:, 0])) + 1  # Counting control as well
+    meta['n_treatments'] = int(max(data['t'])) + 1  # Counting control as well
+    # Backwards compatibility:
+    if meta['n_treatments'] > len(meta['treatment_types']):
+        meta['treatment_types'] = np.append([0], meta['treatment_types'])
     meta['dim'] = data['x'].shape[1]
     meta['n_samples'] = data['x'].shape[0]
     meta['n_pcf_samples'] = np.shape(data['s_pcf'])[2]
+
+    meta["p_t"] = []
+    for i in range(meta["n_treatments"]):
+        meta["p_t"].append(np.mean(data['t'] == i))
 
     return data, meta
 
@@ -93,10 +104,9 @@ def _get_iterators_from_data(data_dict, meta, generator, batch_size=[None], spli
 
         types = {}
         shapes = {}
-        for k in data_dict.keys:
+        for k in data_dict.keys():
             ty = tf.int32 if data_dict[k].dtype == np.dtype('int') else tf.float32
-            shape = list(np.shape(data_dict[k]))
-            shape[0] = 1
+            shape = list(np.shape(data_dict[k]))[1:]
             types[k] = ty
             shapes[k] = shape
 
@@ -128,13 +138,11 @@ def _get_data_file(experiment, file_number):
     :return: file path + name
     """
     data_path = experiment.config.data_dir
-    dataset_name = experiment.config.dataset
-    data_path = os.path.join(data_path, dataset_name)
     file_name = experiment.config.experiment_name
     file = data_path + os.sep + file_name + "_" + str(file_number)
 
     # Check whether exactly one matching file exists
-    matching_files = os.listdir(file + "*")
+    matching_files = glob.glob(file + "*")
     assert len(matching_files) == 1
 
     file_ending = "." + matching_files[0].split(".")[-1]
@@ -188,4 +196,31 @@ def load_data(experiment, file_index, opt_params=None, batch_size=None,
     else:
         print("Unknown file format '{file_ending}'".format(file_ending=file_ending))
 
+    return iterators, meta
+
+
+def load_data_and_matchings(experiment, file_index, opt_params=None, batch_size=None,
+              splits=None, do_shuffle=None, repeat=None, splitting_seed=None):
+    """ Returns iterators for the specified data file. Either opt_params or batch_size must
+    be specified. Also adds all required matching columns."""
+
+    losses = experiment.additional_losses_to_record.split(',')
+    for model in experiment.models:
+        losses += model.model_params.train_loss.split(',')
+    losses = list(set(losses))
+
+    additional_columns = {}
+    groups = {}
+    for matching in losses:
+        if matching not in [l.name for l in loss_def.RegisteredLosses]:
+            path = utils.assemble_matching_path(experiment, matching, file_index)
+            matching_data = np.load(path + "matching.npy")[()]
+            m_groups = matching_data["groups"]
+            m_y = matching_data["y_hat"]
+            additional_columns[matching] = m_y
+            groups["groups_" + matching] = m_groups
+
+    iterators, meta = load_data(experiment, file_index, opt_params, batch_size, splits, do_shuffle,
+                                              repeat, splitting_seed, additional_columns)
+    meta.update(groups)
     return iterators, meta

@@ -7,12 +7,12 @@ import sonnet as snt
 import numpy as np
 
 import utils
-from loss import calculate_losses
+from loss import calculate_losses, propensity_loss
 import loss_def
 from models.utils import str2model
 
 
-def get_train_op(opt_params, loss, forbidden_name = None):
+def get_train_op(opt_params, loss, forbidden_name=None):
     '''
     Sets up an optimizer according to the given parameters and returns an operation to minimize the loss.
     :param opt_params: Parameter dictionary for the optimizer
@@ -55,43 +55,65 @@ def save_model(experiment, saver, model_name, run_id, session):
     saver.save(session, save_dir, global_step=tf.train.get_or_create_global_step())
 
 
-def _prepare_losses(experiment, model_instance, opt_params, meta, losses_to_calculate, tr_iter, val_iter, eval_iter=None):
+def _get_factuals_mask(t, n_treatments):
+    stacking_helper = []
+    for i in range(n_treatments):
+        stacking_helper.append(tf.equal(t, i))
+    idx_f = tf.stack(stacking_helper, axis=1)
 
-    treatment_types = meta["n_treatments"]
-    propensity_model_needed = any([loss_def.needs_propensity(loss) for loss in losses_to_calculate])
-    matching_propensity_distrib = None
+    return idx_f
+
+
+def _prepare_propensity_losses(model_instance, meta, tr_iter_next, val_iter_next):
+    x_tr = tr_iter_next["x"]
+    t_tr = tr_iter_next["t"]
+    s_tr = tr_iter_next["s"]
+    x_val = val_iter_next["x"]
+    t_val = val_iter_next["t"]
+    s_val = val_iter_next["s"]
+
+    n_treatments = meta["n_treatments"]
+
+    mask_tr_f = _get_factuals_mask(t_tr, n_treatments)
+    mask_val_f = _get_factuals_mask(t_val, n_treatments)
+    s_tr = tf.multiply(s_tr, tf.cast(mask_tr_f, tf.float32))
+    s_val = tf.multiply(s_val, tf.cast(mask_val_f, tf.float32))
+
+    mu_hat_tr, sig_hat_tr = model_instance(x_tr, True)
+    mu_hat_val, sig_hat_val = model_instance(x_val, False)
+    tr_losses = propensity_loss(s_tr, mu_hat_tr, sig_hat_tr)
+    val_losses = propensity_loss(s_val, mu_hat_val, sig_hat_val)
+    eval_losses = None
+
+    return tr_losses, val_losses, eval_losses
+
+
+def _prepare_losses(experiment, model_instance, opt_params, meta, losses_to_calculate, tr_iter_next, val_iter_next,
+                    eval_iter_next=None):
+
+    treatment_types = meta["treatment_types"]
     losses = []
 
-    for it in [tr_iter, val_iter, eval_iter]:
-        is_training = it == tr_iter
+    for iter_next in [tr_iter_next, val_iter_next, eval_iter_next]:
+        is_training = iter_next == tr_iter_next
 
-        if it is None:
+        if iter_next is None:
             losses.append(None)
             continue
 
-        if propensity_model_needed:
-            propensity_model_instance = str2model(experiment.propensity_model[0].model_type)(
-                experiment.propensity_model[0].model_params, treatment_types)
-            mu_hat, sig_hat = propensity_model_instance(it["x"][..., 0], False)
-            propensity_distrib = tfp.distributions.MultivariateNormalDiag(loc=mu_hat, scale_diag=sig_hat)
-            if it == tr_iter:
-                matching_propensity_distrib = propensity_distrib
-        else:
-            propensity_distrib = None
-
         n_pcf_samples = meta['n_pcf_samples']
 
-        outputs, normalized_rep = model_instance(it['x'], it['t'], it['s'], is_training, treatment_types)
+        outputs, normalized_rep = model_instance(iter_next['x'], iter_next['t'], iter_next['s'], is_training, treatment_types)
+
         outputs_pcf = []
         for j in range(n_pcf_samples):
-            curr_out_pcf, _ = model_instance(it['x'], it['t'], it['s_pcf'][:, :, j], is_training, treatment_types,
+            curr_out_pcf, _ = model_instance(iter_next['x'], iter_next['t'], iter_next['s_pcf'][:, :, j], is_training, treatment_types,
                                              skip_bin=True)
             outputs_pcf.append(curr_out_pcf)
         outputs_pcf = tf.stack(outputs_pcf, 2)
 
-        curr_loss = calculate_losses(outputs, normalized_rep, it, meta, outputs_pcf,
-                                        opt_params, propensity_distrib, tr_iter,
-                                        matching_propensity_distrib, losses_to_calculate)
+        curr_loss = calculate_losses(outputs, normalized_rep, iter_next, meta, outputs_pcf,
+                                     opt_params, losses_to_calculate)
         losses.append(curr_loss)
 
     return losses[0], losses[1], losses[2]
@@ -171,8 +193,6 @@ def _train(experiment, model_setup, session, train_op, assigns, assigns_inputs, 
 
 
 def _evaluate(experiment, model_setup, session, eval_losses, losses_to_record):
-    opt_params = model_setup.opt_params
-
     loss_records_eval = {loss: [] for loss in losses_to_record}
 
     print("\n%s ------- EVALUATING %s -------" % (utils.get_time_str(), model_setup.model_name))
@@ -182,8 +202,10 @@ def _evaluate(experiment, model_setup, session, eval_losses, losses_to_record):
     # Loops until the iterator ends
     while True:
         # Record losses every x iterations
-        cur_val_losses = session.run([eval_losses[l_name] for l_name in losses_to_record])
-        cur_val_losses_dict = dict(zip(losses_to_record, cur_val_losses))
+        try:
+            cur_val_losses = session.run([eval_losses[l_name] for l_name in losses_to_record])
+        except tf.errors.OutOfRangeError:
+            break
 
         to_print = [eval_iter] + cur_val_losses
         print_form = "Iter%04d:" + "\t%.2f" * len(losses_to_record)
@@ -193,28 +215,43 @@ def _evaluate(experiment, model_setup, session, eval_losses, losses_to_record):
         for i, loss_name in enumerate(losses_to_record):
             loss_records_eval[loss_name].append(cur_val_losses[i])
 
-        eval_iter +=1
+        eval_iter += 1
 
     return loss_records_eval
 
 
-def train_and_evaluate(experiment, model_setup, meta, run_id, tr_iter, val_iter, eval_iter=None, save=False, propensity_params=None):
-    params = model_setup.params
+def train_and_evaluate(experiment, model_setup, meta, run_id, tr_iter, val_iter, eval_iter=None, save=False,
+                       propensity_params=None, is_propensity_model=False):
+    params = model_setup.model_params
     opt_params = model_setup.opt_params
-    model_instance = str2model(model_setup.model_typ)(params, meta["n_treatments"])
+    model_instance = str2model(model_setup.model_type)(params, meta["n_treatments"])
+
+    tr_iter_next = tr_iter.get_next()
+    val_iter_next = val_iter.get_next()
+    eval_iter_next = eval_iter.get_next() if eval_iter is not None else None
 
     # Set up losses
-    losses_objective = model_setup.opt_params.train_loss.split(",")
-    losses_to_record = losses_objective + experiment.additional_losses_to_record.split(",")
-    tr_losses, val_losses, eval_losses = _prepare_losses(experiment, model_instance, params, opt_params, meta,
-                                                        losses_to_record, tr_iter, val_iter, eval_iter)
+    losses_objective = model_setup.model_params.train_loss.split(",")
+    losses_to_record = list(set(losses_objective.copy()))
+    if is_propensity_model:
+        tr_losses, val_losses, eval_losses = _prepare_propensity_losses(model_instance, meta, tr_iter_next, val_iter_next)
+    else:
+        losses_to_record += experiment.additional_losses_to_record.split(",")
+        tr_losses, val_losses, eval_losses = _prepare_losses(experiment, model_instance, opt_params, meta,
+                                                        losses_to_record, tr_iter_next, val_iter_next, eval_iter_next)
 
     # Set up optimizer & initialization
-    objective_loss_train_tensor = tf.add_n([tr_losses[loss] for loss in losses_objective])
-    train_op = get_train_op(opt_params, objective_loss_train_tensor, "multipleNN")
+    objective_loss_train_tensor = tf.add_n([tr_losses[loss] for loss in losses_objective if loss is not None], name="objective_loss")
+
+    if not is_propensity_model and "propensity_model" in experiment.keys():
+        # Keep propensity model variables frozen
+        train_op = get_train_op(opt_params, objective_loss_train_tensor, experiment.propensity_model[0].model_type)
+    else:
+        train_op = get_train_op(opt_params, objective_loss_train_tensor)
+
     init_op = [tf.global_variables_initializer(), tr_iter.initializer, val_iter.initializer]
     if eval_iter is not None:
-        init_op += [eval_iter]
+        init_op += [eval_iter.initializer]
 
     # Making trainable variables assignable so that they can be restored in early stopping
     trainable_vars = tf.trainable_variables()
@@ -253,5 +290,7 @@ def train_and_evaluate(experiment, model_setup, meta, run_id, tr_iter, val_iter,
 
         if eval_iter is not None:
             loss_records_eval = _evaluate(experiment, model_setup, session, eval_losses, losses_to_record)
+        else:
+            loss_records_eval = None
 
     return loss_records_val, best_loss_id, loss_records_eval

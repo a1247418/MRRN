@@ -1,7 +1,7 @@
 import tensorflow as tf
 import sonnet as snt
 
-import utils
+import models.utils
 
 
 class MRRN(snt.AbstractModule):
@@ -30,7 +30,7 @@ class MRRN(snt.AbstractModule):
         self._initializers_out = {"w": tf.contrib.layers.xavier_initializer(),
                               "b": tf.constant_initializer(0)}
 
-    def _build(self, x, t, s, is_training, treatment_types_all=None, skip_bin=False):
+    def _build(self, x, t, s, is_training, treatment_types=None, skip_bin=False):
         def _build_layer(x, n, batch_norm, dropout, initializers_lin):
             if batch_norm:
                 bn = snt.BatchNorm()(x, is_training=is_training)
@@ -43,14 +43,14 @@ class MRRN(snt.AbstractModule):
             return out
 
         # IN LAYERS
-        current_in = x[:, :, 0]
+        current_in = x
         for i in range(self._n_in):
             n_nodes = self._dim_rep if i == (self._n_in-1) else self._dim_in
             current_in = _build_layer(current_in, n_nodes, self._batch_norm_in, self._dropout, self._initializers_in)
 
         # Representation
         rep = current_in  # Shape: bs x len(x)
-        normalized_rep = rep / utils.safe_sqrt(tf.reduce_sum(tf.square(rep), axis=1, keepdims=True))
+        normalized_rep = rep / models.utils.safe_sqrt(tf.reduce_sum(tf.square(rep), axis=1, keepdims=True))
         current_in = normalized_rep
 
         # OUT LAYERS
@@ -59,10 +59,10 @@ class MRRN(snt.AbstractModule):
         for treatment in range(self._n_treatments):
             id_col_s = current_param_treatment if skip_bin else treatment
 
-            s_to_append = s[:, id_col_s]  # bs x 1
+            s_to_append = s[:, id_col_s, tf.newaxis]  # bs x 1
             treatment_in = current_in
 
-            if treatment_types_all[treatment] == 1:
+            if treatment_types[treatment] == 1:
                 current_param_treatment += 1
             for i in range(self._n_out):
                 if i == 0 or self._repeat_concat:
@@ -78,7 +78,7 @@ class MRRN(snt.AbstractModule):
         if skip_bin:
             p_cols = []
             for i in range(self._n_treatments):
-                if treatment_types_all[i]:
+                if treatment_types[i]:
                     p_cols.append(i)
             outputs = tf.gather(outputs, p_cols, axis=1)
 

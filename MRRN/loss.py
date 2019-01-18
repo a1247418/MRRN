@@ -1,8 +1,14 @@
 import tensorflow as tf
+import tensorflow_probability as tfp
 import numpy as np
 import utils
-from loss_def import RegisteredLosses
-from matching_def import MatchingSetup, matching_from_string
+
+
+def _safe_sqrt(x):
+    """
+    Source: https://github.com/clinicalml/cfrnet/
+    """
+    return tf.sqrt(tf.clip_by_value(x, 1e-10, np.inf))
 
 
 def _pdist2sq(X, Y):
@@ -22,7 +28,7 @@ def _pdist2(X, Y):
     Returns the tensorflow pairwise distance matrix
     Source: https://github.com/clinicalml/cfrnet/
     """
-    return utils.safe_sqrt(_pdist2sq(X, Y))
+    return _safe_sqrt(_pdist2sq(X, Y))
 
 
 def _get_factuals_mask(t, n_treatments):
@@ -135,7 +141,7 @@ def _pre_matching_losses(data, meta, s_cf_all, outputs_cf_all, sample_weight, n_
             continue
 
         group_defs = meta["groups_" + loss_name]
-        matching_column_name = "y_" + loss_name
+        matching_column_name = loss_name
 
         for i in range(n_pfc_samples):
             group_assignments = _s2group(s_cf_all[:, :, i], group_defs, n_treatments)  # bs x n_treatments
@@ -146,7 +152,10 @@ def _pre_matching_losses(data, meta, s_cf_all, outputs_cf_all, sample_weight, n_
                 where_g_id = tf.cast(tf.equal(group_assignments, g_id), dtype=tf.float32)  # bs x n_treatments
                 y_m_inplace += tf.multiply(where_g_id, tf.tile(y_m[:, g_id, tf.newaxis], [1, n_treatments]))
 
-            loss_root, loss_sqr, loss_std, loss_std_sqr = _calc_cf_error_from_full_matrix(y_m_inplace, outputs_cf_all[:, :, i], data["t"], sample_weight, meta)
+            loss_root, loss_sqr, loss_std, loss_std_sqr = _calc_cf_error_from_full_matrix(y_m_inplace,
+                                                                                          outputs_cf_all[:, :, i],
+                                                                                          data["t"][:,tf.newaxis],
+                                                                                          sample_weight, meta)
             losses_sqr_temp.append(loss_sqr)
             losses_root_temp.append(loss_root)
             losses_std_temp.append(loss_std)
@@ -175,8 +184,8 @@ def _s2group(s_cf, group_defs, n_treatments):
     return tf.stack(group_assignments, axis=1)  # bs x n_treatments
 
 
-def nn_approx(data, data_m, s_pcf, s_pcf_m, n_treatments, k_max, rem_outliers, reweight=None, space="x",
-              propensity_distrib=None, propensity_distrib_m=None):
+def _nn_approx(data, data_m, s_pcf, s_pcf_m, n_treatments, k_max, rem_outliers, reweight=None, space="x",
+               propensity_distrib=None, propensity_distrib_m=None):
     """
     Approximates counterfactual outcomes by the average of k nearest neighbours.
     :param k: Number of nearest neighbours to average
@@ -365,7 +374,7 @@ def wasserstein_loss(X, t, p, t_id, lam=10, its=10, sq=False):
     if sq:
         M = _pdist2(Xt, Xc)
     else:
-        M = utils.safe_sqrt(_pdist2(Xt, Xc))
+        M = _safe_sqrt(_pdist2(Xt, Xc))
     M = tf.cast(M, tf.float32)
 
     ''' Estimate lambda and delta '''
@@ -406,15 +415,15 @@ def wasserstein_loss(X, t, p, t_id, lam=10, its=10, sq=False):
 
 def regularization_loss():
     graph_regularizers = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-    regularization_loss = tf.cast(tf.reduce_sum(graph_regularizers), tf.float32)
-    return regularization_loss
+    reg_loss = tf.cast(tf.reduce_sum(graph_regularizers), tf.float32)
+    return reg_loss
 
 
-def calculate_losses(outputs, normalized_rep, data, meta, outputs_pcf, opt_params, matching_data, loss_list):
+def calculate_losses(outputs, normalized_rep, data, meta, outputs_pcf, opt_params, loss_list):
     y = data['y'] # batch_size x n_treatments x 1
-    t = data['t', tf.newaxis]  # batch_size x 1
-    s = data['s'][...]  # batch_size x n_treatments x 1
-    y_pcf = None if not 'y_pcf' in data.keys() else data['y_pcf']
+    t = data['t'][:, tf.newaxis]  # batch_size x 1
+    s = data['s']  # batch_size x n_treatments x 1
+    y_pcf = None if 'y_pcf' not in data.keys() else data['y_pcf']
     p_t = meta["p_t"]
     n_treatments = meta["n_treatments"]
     treatment_types = meta["treatment_types"]
@@ -445,8 +454,6 @@ def calculate_losses(outputs, normalized_rep, data, meta, outputs_pcf, opt_param
         n_pfc_samples = y_pcf.shape[2]
         y_pcf = y_pcf
         s_pcf = data["s_pcf"]
-        s_pcf_m = matching_data["s_pcf"]
-        s_m = matching_data["s"]
 
         # Set up data shape for convenience
         y_cf_all = _get_all_counterfactuals(y, y_pcf, n_treatments, treatment_types_all, n_pfc_samples)
@@ -491,5 +498,29 @@ def calculate_losses(outputs, normalized_rep, data, meta, outputs_pcf, opt_param
         "REG": reg_loss,
     }
     losses_dict.update(pre_m_losses_dict)
+
+    return losses_dict
+
+
+def propensity_loss(s, mu_hat, sig_hat):
+    """Returns a dictionary of losses, containing the negative log probabilities of the factual tratment s,
+    given a multivariate normal with mu_hat and covariance diagonal sig_hat."""
+
+    normal = tfp.distributions.MultivariateNormalDiag(loc=mu_hat, scale_diag=sig_hat)
+
+    log_probabilities = normal.log_prob(s)
+
+    # Remove outliers
+    mean, stdev = tf.nn.moments(log_probabilities, axes=[0])
+    mask_lower = tf.greater(log_probabilities, mean - 3 * stdev)
+    mask_upper = tf.less(log_probabilities, mean + 3 * stdev)
+    mask = tf.logical_and(mask_lower, mask_upper)
+    log_probabilities = tf.boolean_mask(log_probabilities, mask)
+
+    neg_log_probability = -tf.reduce_mean(log_probabilities)
+
+    losses_dict = {
+        "MSE_F": neg_log_probability,
+        "REG": regularization_loss()}
 
     return losses_dict

@@ -32,7 +32,7 @@ class _NN(snt.AbstractModule):
 
         current_in = x
 
-        bn = [snt.BatchNorm() for i in range(self._n)]
+        bn = [snt.BatchNorm() for _ in range(self._n)]
         lin = [snt.Linear(output_size=self._dim, regularizers=self._regularizers, initializers=self._initializers) for i
                in range(self._n)]
         projection = snt.Linear(output_size=self._out_dim, regularizers=self._regularizers,

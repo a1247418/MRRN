@@ -11,7 +11,7 @@ def check_path(directory):
     """ Makes sure that the directory exist. """
     # Create directories
     path_trace = directory.split(os.sep)
-    for i in len(path_trace):
+    for i in range(len(path_trace)):
         partial_dir = os.path.join(*(path_trace[:i+1]))
         if not os.path.exists(partial_dir):
             print("Creating directory: " + partial_dir)
@@ -25,21 +25,22 @@ def assemble_model_path(experiment, model_name, run_id):
     :param run_id: 0-based index of the data file
     :return: model path
     """
-    prop_path = experiment.config.saves_dir + model_name + "_" + experiment.config.dataset + "_" + \
-        experiment.config.experiment_name + "_seed" + experiment.config.splitting_seed + "_" + run_id + os.sep
+    prop_path = experiment.config.saves_dir + model_name + "_seed" + str(experiment.config.splitting_seed) + "_" + \
+                str(run_id) + os.sep
 
     return prop_path
 
 
-def assemble_matching_path(experiment, matching, run_id):
+def assemble_matching_path(experiment, matching_name, run_id):
     """
     Returns the path to the matching saves.
     :param experiment: experimental setup
+    :param matching_name: name of the matching loss
     :param run_id: 0-based index of the data file
     :return: matching path
     """
-    prop_path = experiment.config.saves_dir + matching + "_" + experiment.config.dataset + "_" + \
-        experiment.config.experiment_name + "_seed" + experiment.config.splitting_seed + "_" + run_id + os.sep
+    prop_path = experiment.config.saves_dir + matching_name + "_seed" + str(experiment.config.splitting_seed) + "_" + \
+                str(run_id) + os.sep
 
     return prop_path
 

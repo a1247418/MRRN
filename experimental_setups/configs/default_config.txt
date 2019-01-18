@@ -6,12 +6,12 @@ s_evaluation_loss: "MSE_F,MSE_CF"
 
 i_n_data_loading_threads: 16
 
-use_tracing = False
+b_use_tracing: False
 
 i_print_interval: 10
 
 s_dataset: multiNews
-s_experiment_name: 111_7000k15
+s_experiment_name: 1_7000k15
 
 s_base_dir: ..
 s_data_dir: data

@@ -8,4 +8,4 @@ s_nonlinearity: elu
 b_batch_norm_in: 0
 b_batch_norm_out: 0
 b_repeat_concat: 1
-s_train_loss: MSE_F,REG, P_E_2_15_1
+s_train_loss: MSE_F,REG,P_E_2_15_1

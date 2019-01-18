@@ -6,13 +6,16 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 import sonnet as snt
 
-import data_loader
 import utils
+import models.utils
 from matching_def import Group, Weighting, Space
 
 
 def _pdist2sq(X, Y):
-    """ Computes the squared Euclidean distance between all pairs x in X, y in Y """
+    """
+    Computes the squared Euclidean distance between all pairs x in X, y in Y.
+    Source: https://github.com/clinicalml/cfrnet/
+    """
     C = -2 * np.matmul(X, np.transpose(Y))
     nx = np.sum(np.square(X), 1, keepdims=True)
     ny = np.sum(np.square(Y), 1, keepdims=True)
@@ -21,29 +24,28 @@ def _pdist2sq(X, Y):
 
 
 def _pdist2(X, Y):
-    """ Returns the tensorflow pairwise distance matrix """
+    """
+    Returns the tensorflow pairwise distance matrix.
+    Source: https://github.com/clinicalml/cfrnet/
+    """
     return np.sqrt(np.clip(_pdist2sq(X, Y), 1e-10, np.inf))
 
 
 def _save_matching(experiment, matching_setup, run_id, matching_results):
-    """
-    Saves the given matching results to a file.
-    :param experiment:
-    :param matching_setup:
-    :param run_id:
-    :param matching_results:
-    :return:
-    """
-    path = utils.assemble_matching_path(experiment, matching_setup.to_String(), run_id)
-    np.save(path, matching_results)
+    """ Saves the given matching results to a file. """
+    path = utils.assemble_matching_path(experiment, matching_setup.to_string(), run_id)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    np.save(path + "matching", matching_results)
 
 
-def produce_grouping(t, s, treatment_types_with_control, levels=1):
+def produce_grouping(t, s, treatment_types, levels=1):
     """
     Preprocessing to matching: Groups members of different treatments or treatment-subranges into lists.
     Assumes s to be in range [0,1]
     :param t: Treatment vectors of dimension n_samples x n_treatments
     :param s: Treatment strength vectors of dimension n_samples x n_treatments
+    :param treatment_types: list of treatment types. 0: binary, 1: continuous
     :param levels: Into how many parts the treatment range should be partitioned.
     :return: Vector of group indicator. Lists of groupings: n_groups x n_grouping_members
     """
@@ -55,7 +57,7 @@ def produce_grouping(t, s, treatment_types_with_control, levels=1):
     group_definitions = []
     for treatment in range(n_treatments):
         for level in range(levels):
-            if treatment_types_with_control[treatment] == 1 or level == 0:
+            if treatment_types[treatment] == 1 or level == 0:
                 group_list.append(np.array([]))
                 group_id = len(group_list)-1
 
@@ -76,13 +78,13 @@ def produce_grouping(t, s, treatment_types_with_control, levels=1):
 
 
 def produce_matching(experiment, it_to_match, it_matches, treatment_types, matching_setup, run_id,
-                     propensity_model_instance=None, save=False):
+                     save=False):
     """
     Calculates the matching-based estimation of y, given the data and a matching specification.
     :param experiment: experiment specification
     :param it_to_match: iterator of the data to estimate y
     :param it_matches: data to find matches from. if None, it_to_match will be used instead
-    :param treatment_types_with_control: list of treatment types
+    :param treatment_types: list of treatment types
     :param matching_setup: matching procedure specification of type MatchingSetup
     :param propensity_model_instance: optional propensity model instance
     :return: estimates of y_hat for data to match, group definitions
@@ -91,58 +93,62 @@ def produce_matching(experiment, it_to_match, it_matches, treatment_types, match
     weighting = matching_setup.weighting
     k_max = matching_setup.k_max
     levels = matching_setup.levels
+    needs_propensity_model = matching_setup.needs_propensity_model
+
+    if needs_propensity_model:
+        propensity_model_class = models.utils.str2model(experiment.propensity_model[0].model_type)
+        propensity_model_instance = propensity_model_class(experiment.propensity_model[0].model_params,
+                                                           len(treatment_types))
 
     session = tf.Session()
+    init_op = [tf.global_variables_initializer(), it_to_match.initializer]
+    if it_matches:
+        init_op += [it_matches.initializer]
+    session.run(init_op)
+
+    if needs_propensity_model:
+
+        mu_hat, sig_hat = propensity_model_instance(it_to_match.get_next()['x'], False)
+        propensity_distrib = tfp.distributions.MultivariateNormalDiag(loc=mu_hat, scale_diag=sig_hat)
+
+        if it_matches:
+            mu_hat_m, sig_hat_m = propensity_model_instance(it_matches.get_next()['x'], False)
+        else:
+            mu_hat_m, sig_hat_m = propensity_model_instance(it_to_match.get_next()['x'], False)
+        propensity_distrib_m = tfp.distributions.MultivariateNormalDiag(loc=mu_hat_m, scale_diag=sig_hat_m)
+
+        # Restore propensity model parameters
+        propensity_saver = snt.get_saver(propensity_model_instance)
+
+        prop_path = utils.assemble_model_path(experiment, "prop", run_id)
+        propensity_saver.restore(session, tf.train.latest_checkpoint(prop_path))
 
     data_to_match = session.run(it_to_match.get_next())
     x = data_to_match['x']
     z = x  # This is the space to weight on. currently it is always the space we match in.
-    y = data_to_match['y']
     t = data_to_match['t']
+    y = data_to_match['y']
+    y = y[range(np.shape(y)[0]), t]
     s = data_to_match['s']
     if it_matches:
         data_matches = session.run(it_matches.get_next())
         x_m = data_matches['x']
         z_m = x_m
-        y_m = data_matches['y']
         t_m = data_matches['t']
+        y_m = data_matches['y']
+        y_m = y_m[range(np.shape(y_m)[0]), t_m]
         s_m = data_matches['s']
     else:
         x_m = None
         z_m = None
-        y_m = y
         t_m = t
+        y_m = y
         s_m = s
 
     group_list_m, group_defs = produce_grouping(t_m, s_m, treatment_types, levels)
-
     n_groups = len(group_list_m)
     y_hat_all = np.tile(y[:, np.newaxis], [1, n_groups])
 
-    n_samples = np.shape(x)[0]
-    if propensity_model_instance is not None:
-        n_samples_m = n_samples if x_m is None else np.shape(x_m)[0]
-
-        iter_original, iter_names = data_loader.get_iterable_iterator_from_data({"x": x}, batch_size=n_samples)
-        iter = iter_original.get_next()
-        mu_hat, sig_hat = propensity_model_instance(iter["x"], False)
-        propensity_distrib = tfp.distributions.MultivariateNormalDiag(loc=mu_hat, scale_diag=sig_hat)
-
-        iter_original_m, iter_names_m = data_loader.get_iterable_iterator_from_data(
-            {"x": x_m if x_m is not None else x}, batch_size=n_samples_m)
-        iter_m = iter_original_m.get_next()
-        mu_hat_m, sig_hat_m = propensity_model_instance(iter_m["x"], False)
-        propensity_distrib_m = tfp.distributions.MultivariateNormalDiag(loc=mu_hat_m, scale_diag=sig_hat_m)
-
-        # Restore propensity model parameters
-        propensity_saver = snt.get_saver(propensity_model_instance)
-        init_op = [tf.global_variables_initializer(), iter_original.initializer, iter_original_m.initializer]
-
-        feed_dicts = {iter_names[k]: {"x": x}[k] for k in iter_names.keys()}
-        feed_dicts.update({iter_names_m[k]: {"x": x_m if x_m is not None else x}[k] for k in iter_names_m.keys()})
-        session.run(init_op, feed_dict=feed_dicts)
-
-        propensity_saver.restore(session, tf.train.latest_checkpoint(experiment.config.saves_dir + "prop" + os.sep))
     for j in range(n_groups):
         i_to_match = np.array([i for i in range(np.shape(x)[0])]) if x_m is not None else \
             np.array([i for i in range(len(t_m)) if i not in group_list_m[j]])
@@ -226,7 +232,7 @@ def produce_matching(experiment, it_to_match, it_matches, treatment_types, match
             if z is not None:
                 dist_w = _pdist2(z_to_match, z_matches)
                 W = 1 / (dist_w + (
-                            dist_w == 0) + 1e-10)  # Count 0 dist samples as weight 1. this likely only occurs for binary s.
+                        dist_w == 0) + 1e-10)  # Count 0 dist samples as weight 1. this likely only occurs for binary s.
             else:
                 W = 1 / (dist + (dist == 0) + 1e-10)
         else:
@@ -242,7 +248,6 @@ def produce_matching(experiment, it_to_match, it_matches, treatment_types, match
             y_hat_all[:, j] = y_hat
 
     if save:
-        # TODO:check if matching file exists
         matching_results = {
             "y_hat": y_hat_all,
             "groups": group_defs

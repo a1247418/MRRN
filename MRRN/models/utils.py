@@ -1,8 +1,9 @@
 import tensorflow as tf
+import numpy as np
 
-from benchmark_models import NN, OLS, SplitRegressor
-from MRRN_model import MRRN
-from propensity_model import MultipleNN
+from models.benchmark_models import NN, OLS, SplitRegressor
+from models.MRRN_model import MRRN
+from models.propensity_model import MultipleNN
 
 
 def str2model(model_string):
@@ -10,13 +11,15 @@ def str2model(model_string):
     if model_string == "NN":
         model_class = NN
     elif model_string == "OLS":
-        model_class == OLS
+        model_class = OLS
     elif model_string == "OLS_split":
-        model_class == SplitRegressor
+        model_class = SplitRegressor
     elif model_string == "MRRN":
-        model_class == MRRN
+        model_class = MRRN
     elif model_string == "MultipleNN":
-        model_class == MultipleNN
+        model_class = MultipleNN
+    else:
+        print("ERROR: Cannot identify model class: {m_class}".format(m_class=model_string))
 
     assert model_class is not None
 
